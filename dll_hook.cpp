@@ -20,9 +20,9 @@ BOOL APIENTRY DllMain(HINSTANCE hModule, DWORD  ul_reason_for_call, LPVOID lpRes
 
 /*
 * acts as the actual "main" function
-* param1: the notepad handler
-* param2: the function that I'd like to replace the address in the iat
-* param3: the function that replaces the address of the TARGET_FUNCTION with XOR_NOTEPAD in the iat.
+* mod_instance: the notepad handler
+* target_function: the function that I'd like to replace the address in the iat
+* xor_notepad: the function that replaces the address of the TARGET_FUNCTION with XOR_NOTEPAD in the iat.
 */
 bool hook_function(HMODULE mod_instance, LPCSTR target_function, PVOID xor_notepad)
 {
@@ -33,25 +33,29 @@ bool hook_function(HMODULE mod_instance, LPCSTR target_function, PVOID xor_notep
   bool found_fun = false; // checking when the dll reached the wanted function.
   top_import_table = import_table(mod_instance); // getting the import table structure
   while (top_import_table->OriginalFirstThunk) { // go through the entire import table
-    iat_ptr = (PIMAGE_THUNK_DATA)(bytes_mod_instance + top_import_table->FirstThunk);//ptr iat
-    ilt_ptr = (PIMAGE_THUNK_DATA)(bytes_mod_instance + top_import_table->OriginalFirstThunk); // ptr ilt
-    ilt_data = (PIMAGE_IMPORT_BY_NAME)(bytes_mod_instance + ilt_ptr->u1.AddressOfData); // getting the ilt relevent deails (name & location)
-    while (*(WORD*)ilt_ptr > 0 && *(WORD*)iat_ptr > 0 && ilt_ptr->u1.Function && ilt_ptr != NULL) { // going though the ilt and iat pointers to make sure that the loop will stop when it's finished 
-      if (!found_fun) { 
-        char* current_function = (char*)((PBYTE)ilt_data + sizeof(WORD)); // getting the current function name (+word to only get the name)
-        if (current_function != NULL && target_function != NULL && ilt_ptr->u1.Function && current_function != "") { // double check that the name is ok
-          if (strcmp(target_function, current_function) == 0) { // checking if the function name in the import table is the same as our targeted function that we want to hook
-            //MessageBoxA(NULL, (char*)ilt_data, "Hooked!", MB_OK);
-            if (rewirte_thunk_addr(iat_ptr, xor_notepad)) {
-             // MessageBoxA(NULL, (LPCSTR)current_function, (LPCSTR)((PBYTE)mod_instance + top_import_table->Name), MB_OK);
-              found_fun = true;
+    char * dll_name = (char *)(bytes_mod_instance + top_import_table->Name);
+    if(strcmp(dll_name, TARGET_DLL) == 0){
+      iat_ptr = (PIMAGE_THUNK_DATA)(bytes_mod_instance + top_import_table->FirstThunk);//ptr iat
+      ilt_ptr = (PIMAGE_THUNK_DATA)(bytes_mod_instance + top_import_table->OriginalFirstThunk); // ptr ilt
+      ilt_data = (PIMAGE_IMPORT_BY_NAME)(bytes_mod_instance + ilt_ptr->u1.AddressOfData); // getting the ilt relevent deails (name & location)
+      while (*(ULONGLONG*)ilt_ptr > 0 && *(ULONGLONG*)iat_ptr > 0 && ilt_ptr->u1.Function && ilt_ptr != NULL) { // going though the ilt and iat pointers to make sure that the loop will stop when it's finished 
+        if (!found_fun) { 
+          char* current_function = (char*)((PBYTE)ilt_data + sizeof(WORD)); // getting the current function name (+word to only get the name)
+          //MessageBoxA(NULL, (char*)current_function, (LPCSTR)(bytes_mod_instance + top_import_table->Name), MB_OK);
+          if (current_function != NULL && target_function != NULL && ilt_ptr->u1.Function && current_function != "") { // double check that the name is ok
+            if (strcmp(target_function, current_function) == 0) { // checking if the function name in the import table is the same as our targeted function that we want to hook
+              //MessageBoxA(NULL, (char*)ilt_data, "Hooked!", MB_OK);
+              if (rewirte_thunk_addr(iat_ptr, xor_notepad)) {
+               // MessageBoxA(NULL, (LPCSTR)current_function, (LPCSTR)((PBYTE)mod_instance + top_import_table->Name), MB_OK);
+                found_fun = true;
+              }
             }
           }
         }
+        ilt_ptr++;
+        ilt_data = (PIMAGE_IMPORT_BY_NAME)(bytes_mod_instance + ilt_ptr->u1.AddressOfData); // getting the next details
+        iat_ptr++;
       }
-      ilt_ptr++;
-      ilt_data = (PIMAGE_IMPORT_BY_NAME)(bytes_mod_instance + ilt_ptr->u1.AddressOfData); // getting the next details
-      iat_ptr++;
     }
     top_import_table++; // go to the next dll
   }
@@ -69,14 +73,13 @@ BOOL WINAPI xor_notepad(HANDLE hFile, LPCVOID lpBuffer, DWORD nNumberOfBytesToWr
   for (charr = 0; charr < nNumberOfBytesToWrite; charr++) {
       write_file_input[charr] = write_file_input[charr] ^ 0xff;
   }
-  DWORD junk;
-  BOOL write_file_fun = WriteFile(hFile, write_file_input, nNumberOfBytesToWrite, &junk, lpOverlapped); // calling the original WriteFile so it'll write the new input
+  BOOL write_file_fun = WriteFile(hFile, write_file_input, nNumberOfBytesToWrite, lpNumberOfBytesWritten, lpOverlapped); // calling the original WriteFile so it'll write the new input
   return TRUE;
 }
 
 /*
 * The following function return the import table for notepad (all of notepad's dll files)
-* param1: a handler for notepad (used to get the address)
+* top_import_table: a handler for notepad (used to get the address)
 */
 PIMAGE_IMPORT_DESCRIPTOR import_table(HMODULE top_import_table) {
   PIMAGE_DOS_HEADER magic_number_header;
@@ -93,16 +96,16 @@ PIMAGE_IMPORT_DESCRIPTOR import_table(HMODULE top_import_table) {
 
 /*
 * the following function rewrites the address of TARGET_FUNCTION in the IAT with NEW_FUNCTION
-* param1: the pointer for the IAT table at the location of TARGET_FUNCTION
-* param2: the second param is meant to take the address of the new function
+* thunk: the pointer for the IAT table at the location of TARGET_FUNCTION
+* new_function: the second param is meant to take the address of the new function
 */
 bool rewirte_thunk_addr(PIMAGE_THUNK_DATA thunk, void* new_function) {
   DWORD current_protection_state;
   DWORD junk;
-  VirtualProtect(thunk, 4096, PAGE_READWRITE, &current_protection_state);
+  VirtualProtect(thunk, 4096, PAGE_READWRITE, &current_protection_state); // changing the protection for the page
   original_addr = thunk->u1.Function;
-  thunk->u1.Function = (ULONGLONG)new_function;
-  VirtualProtect(thunk, 4096, current_protection_state, &junk);
+  thunk->u1.Function = (ULONGLONG)new_function; // changing the address of TARGET_FUNCTION to NEW_FUNCTION
+  VirtualProtect(thunk, 4096, current_protection_state, &junk); // changing back the protection 
   return true;
 }
 

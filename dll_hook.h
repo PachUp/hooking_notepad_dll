@@ -8,7 +8,7 @@
 #include <stdio.h>
 
 #define TARGET_FUNCTION "WriteFile"
-#define TARGET_DLL "KERNEL32.DLL"
+#define TARGET_DLL "KERNEL32.dll"
 #define IMPORT_TABLE_OFFSET 1 // the location of the import table in the configuration
 DWORD original_addr; // the original address in the iat of TARGET_FUNCTION
 
